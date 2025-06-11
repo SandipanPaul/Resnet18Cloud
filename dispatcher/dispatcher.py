@@ -14,9 +14,7 @@ logger = logging.getLogger(__name__)
 class Dispatcher:
     def __init__(self):
         # List of ML service server. Will have to change on containerizing the app.py
-        self.replicas = [
-            {"url": "http://127.0.0.1:5000", "active_requests": 0},
-        ]
+        self.endpoint_url = "http://127.0.0.1:5000"
         
         # Request queue
         self.request_queue = queue.Queue(maxsize=200)
@@ -38,16 +36,6 @@ class Dispatcher:
         
         logger.info("Dispatcher initialized")
     
-    def _get_next_replica(self):
-        """Simple round-robin load balancing"""
-        replica = self.replicas[self.current_replica]
-        self.current_replica = (self.current_replica + 1) % len(self.replicas)
-        return replica
-    
-    def _get_least_loaded_replica(self):
-        """Load balancing based on active requests"""
-        return min(self.replicas, key=lambda r: r["active_requests"])
-    
     def _process_queue(self):
         """Background worker to process queued requests"""
         while True:
@@ -62,19 +50,16 @@ class Dispatcher:
     
     def _forward_request(self, request_data):
         """Forward request to a replica and store result"""
-        request_id = request_data['request_id']
-        replica = self._get_least_loaded_replica()
-        replica["active_requests"] += 1
-        
+        request_id = request_data['request_id']        
         
         self.results[request_id]['status'] = 'processing'
-        self.results[request_id]['replica_used'] = replica['url']
+        self.results[request_id]['replica_used'] = self.endpoint_url
         
         try:
             # Forward the image to ML Server
             files = {'image': request_data['image_data']}
             start_time = time.time()
-            response = requests.post(f"{replica['url']}/predict", files=files, timeout=30)
+            response = requests.post(f"{self.endpoint_url}/predict", files=files, timeout=30)
             processing_time = time.time() - start_time
             
             if response.status_code == 200:
@@ -86,7 +71,7 @@ class Dispatcher:
                     'processing_time': processing_time,
                     'completed_at': datetime.now().isoformat()
                 })
-                logger.info(f"Request {request_id} processed successfully by {replica['url']}")
+                logger.info(f"Request {request_id} processed successfully by {self.endpoint_url}")
             else:
                 self.failed_requests += 1
                 
@@ -106,8 +91,6 @@ class Dispatcher:
                 'completed_at': datetime.now().isoformat()
             })
             logger.error(f"Error forwarding request {request_id}: {e}")
-        finally:
-            replica["active_requests"] -= 1
     
     def queue_request(self, image_data, filename):
         """Add request to queue and return request ID"""
@@ -156,13 +139,7 @@ class Dispatcher:
             "successful_requests": self.successful_requests,
             "failed_requests": self.failed_requests,
             "stored_results": len(self.results),
-            "replicas": [
-                {
-                    "url": r["url"],
-                    "active_requests": r["active_requests"]
-                }
-                for r in self.replicas
-            ]
+            "endpoint_url": self.endpoint_url
         }
 
 # Flask app
