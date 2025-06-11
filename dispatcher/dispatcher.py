@@ -6,6 +6,8 @@ from flask import Flask, request, jsonify
 import logging
 import uuid
 from datetime import datetime, timedelta
+import configparser
+import os, sys
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -13,8 +15,16 @@ logger = logging.getLogger(__name__)
 
 class Dispatcher:
     def __init__(self):
-        # List of ML service server. Will have to change on containerizing the app.py
-        self.endpoint_url = "http://127.0.0.1:5000"
+        # Load configuration
+        config = configparser.ConfigParser()
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'service.cfg')
+        try:
+            config.read(config_path)
+            service_config = config['service']
+            self.endpoint_url = f"{service_config['protocol']}://{service_config['minikube_ip']}:{service_config['node_port']}"
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            sys.exit(1)
         
         # Request queue
         self.request_queue = queue.Queue(maxsize=200)
@@ -29,6 +39,14 @@ class Dispatcher:
         self.total_requests = 0
         self.successful_requests = 0
         self.failed_requests = 0
+        
+        # New metrics
+        self.start_time = time.time()
+        self.peak_queue_size = 0
+        self.total_processing_time = 0
+        self.total_queue_time = 0
+        self.last_request_time = None
+        self.queue_capacity = 200  # matches maxsize from queue initialization
         
         # Start background worker
         self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
@@ -56,11 +74,16 @@ class Dispatcher:
         self.results[request_id]['replica_used'] = self.endpoint_url
         
         try:
+            # Calculate queue time
+            queue_time = time.time() - request_data['timestamp']
+            self.total_queue_time += queue_time
+            
             # Forward the image to ML Server
             files = {'image': request_data['image_data']}
             start_time = time.time()
             response = requests.post(f"{self.endpoint_url}/predict", files=files, timeout=30)
             processing_time = time.time() - start_time
+            self.total_processing_time += processing_time
             
             if response.status_code == 200:
                 self.successful_requests += 1
@@ -112,6 +135,11 @@ class Dispatcher:
                 'request_id': request_id
             }
             
+            # Update peak queue size
+            current_size = self.request_queue.qsize()
+            self.peak_queue_size = max(self.peak_queue_size, current_size)
+            self.last_request_time = time.time()
+            
             self.request_queue.put(request_data, block=False)
             logger.info(f"Request {request_id} queued. Queue size: {self.request_queue.qsize()}")
             return request_id
@@ -132,14 +160,50 @@ class Dispatcher:
         return self.results.get(request_id, None)
     
     def get_status(self):
-        """Get dispatcher status"""
+        """Get enhanced dispatcher status"""
+        current_time = time.time()
+        uptime = current_time - self.start_time
+        
+        # Calculate derived metrics
+        avg_processing_time = (
+            self.total_processing_time / self.successful_requests 
+            if self.successful_requests > 0 else 0
+        )
+        avg_queue_time = (
+            self.total_queue_time / self.total_requests 
+            if self.total_requests > 0 else 0
+        )
+        error_rate = (
+            (self.failed_requests / self.total_requests) * 100 
+            if self.total_requests > 0 else 0
+        )
+        throughput = self.successful_requests / uptime if uptime > 0 else 0
+        
         return {
+            # Existing metrics
             "queue_size": self.request_queue.qsize(),
             "total_requests": self.total_requests,
             "successful_requests": self.successful_requests,
             "failed_requests": self.failed_requests,
             "stored_results": len(self.results),
-            "endpoint_url": self.endpoint_url
+            "endpoint_url": self.endpoint_url,
+            
+            # New metrics
+            "performance_metrics": {
+                "avg_processing_time": round(avg_processing_time, 3),
+                "avg_queue_time": round(avg_queue_time, 3),
+                "throughput": round(throughput, 2)
+            },
+            "queue_metrics": {
+                "peak_queue_size": self.peak_queue_size,
+                "queue_capacity": self.queue_capacity,
+                "queue_utilization": round((self.request_queue.qsize() / self.queue_capacity) * 100, 2)
+            },
+            "health_metrics": {
+                "error_rate": round(error_rate, 2),
+                "uptime": round(uptime, 2),
+                "last_request_timestamp": self.last_request_time
+            }
         }
 
 # Flask app
