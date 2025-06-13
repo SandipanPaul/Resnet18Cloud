@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resnet18-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: resnet18-app
+  template:
+    metadata:
+      labels:
+        app: resnet18-app
+    spec:
+      containers:
+      - name: resnet18-app
+        image: resnet18-app:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5000
+        
+        
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resnet18-service
+spec:
+  selector:
+    app: resnet18-app
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+      nodePort: 31866
+  type: NodePort

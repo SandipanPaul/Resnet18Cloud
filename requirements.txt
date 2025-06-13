@@ -3,3 +3,4 @@ torch
 torchvision
 flask
 requests
+kubernetes
