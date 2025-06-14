@@ -8,10 +8,81 @@ import uuid
 from datetime import datetime, timedelta
 import configparser
 import os, sys
+import hashlib
+from collections import OrderedDict
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+class ImageCache:
+    """LRU Cache for processed images"""
+    def __init__(self, max_size=1000):
+        self.max_size = max_size
+        self.cache = OrderedDict()  # LRU cache using OrderedDict
+        self.hits = 0
+        self.misses = 0
+        self.lock = threading.Lock()  # Thread safety
+    
+    def _generate_hash(self, image_data):
+        """Generate SHA-256 hash of image content"""
+        return hashlib.sha256(image_data).hexdigest()
+    
+    def get(self, image_data):
+        """Get cached result for image"""
+        image_hash = self._generate_hash(image_data)
+        
+        with self.lock:
+            if image_hash in self.cache:
+                # Move to end (most recently used)
+                result = self.cache.pop(image_hash)
+                self.cache[image_hash] = result
+                self.hits += 1
+                logger.info(f"Cache HIT for image hash: {image_hash[:12]}...")
+                return result
+            else:
+                self.misses += 1
+                logger.info(f"Cache MISS for image hash: {image_hash[:12]}...")
+                return None
+    
+    def put(self, image_data, result):
+        """Store result in cache"""
+        image_hash = self._generate_hash(image_data)
+        
+        with self.lock:
+            # Remove oldest items if cache is full
+            while len(self.cache) >= self.max_size:
+                oldest_hash, _ = self.cache.popitem(last=False)
+                logger.info(f"Cache evicted oldest entry: {oldest_hash[:12]}...")
+            
+            # Add new result
+            self.cache[image_hash] = {
+                'result': result,
+                'cached_at': datetime.now().isoformat(),
+                'image_hash': image_hash
+            }
+            logger.info(f"Cached result for image hash: {image_hash[:12]}...")
+    
+    def get_stats(self):
+        """Get cache statistics"""
+        with self.lock:
+            total_requests = self.hits + self.misses
+            hit_rate = (self.hits / total_requests * 100) if total_requests > 0 else 0
+            
+            return {
+                'size': len(self.cache),
+                'max_size': self.max_size,
+                'hits': self.hits,
+                'misses': self.misses,
+                'hit_rate': round(hit_rate, 2),
+                'utilization': round((len(self.cache) / self.max_size * 100), 2)
+            }
+    
+    def clear(self):
+        """Clear all cached entries"""
+        with self.lock:
+            self.cache.clear()
+            logger.info("Cache cleared")
 
 class Dispatcher:
     def __init__(self):
@@ -26,6 +97,9 @@ class Dispatcher:
             logger.error(f"Failed to load config: {e}")
             sys.exit(1)
         
+        # Initialize cache
+        self.cache = ImageCache(max_size=1000)  # Configurable cache size
+        
         # Request queue
         self.request_queue = queue.Queue(maxsize=200)
         
@@ -39,6 +113,7 @@ class Dispatcher:
         self.total_requests = 0
         self.successful_requests = 0
         self.failed_requests = 0
+        self.cache_hits = 0  # New metric for cache hits
         
         # New metrics
         self.start_time = time.time()
@@ -52,7 +127,7 @@ class Dispatcher:
         self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self.worker_thread.start()
         
-        logger.info("Dispatcher initialized")
+        logger.info("Dispatcher initialized with caching enabled")
     
     def _process_queue(self):
         """Background worker to process queued requests"""
@@ -87,12 +162,18 @@ class Dispatcher:
             
             if response.status_code == 200:
                 self.successful_requests += 1
+                result_data = response.json()
+                
+                # Store result in cache for future use
+                image_content = request_data['image_data'][1]  # Extract image bytes
+                self.cache.put(image_content, result_data)
                 
                 self.results[request_id].update({
                     'status': 'completed',
-                    'result': response.json(),
+                    'result': result_data,
                     'processing_time': processing_time,
-                    'completed_at': datetime.now().isoformat()
+                    'completed_at': datetime.now().isoformat(),
+                    'from_cache': False
                 })
                 logger.info(f"Request {request_id} processed successfully by {self.endpoint_url}")
             else:
@@ -116,11 +197,33 @@ class Dispatcher:
             logger.error(f"Error forwarding request {request_id}: {e}")
     
     def queue_request(self, image_data, filename):
-        """Add request to queue and return request ID"""
+        """Add request to queue and return request ID, with cache check"""
         self.total_requests += 1
-        
         request_id = str(uuid.uuid4())
         
+        # Check cache first
+        cached_result = self.cache.get(image_data)
+        if cached_result:
+            self.cache_hits += 1
+            self.successful_requests += 1
+            
+            # Return cached result immediately
+            self.results[request_id] = {
+                'status': 'completed',
+                'result': cached_result['result'],
+                'filename': filename,
+                'request_id': request_id,
+                'queued_at': datetime.now().isoformat(),
+                'completed_at': datetime.now().isoformat(),
+                'from_cache': True,
+                'cached_at': cached_result['cached_at'],
+                'processing_time': 0.001  # Negligible cache lookup time
+            }
+            
+            logger.info(f"Request {request_id} served from cache immediately")
+            return request_id
+        
+        # Not in cache, proceed with normal queueing
         try:
             request_data = {
                 'request_id': request_id,
@@ -132,7 +235,8 @@ class Dispatcher:
                 'status': 'queued',
                 'filename': filename,
                 'queued_at': datetime.now().isoformat(),
-                'request_id': request_id
+                'request_id': request_id,
+                'from_cache': False
             }
             
             # Update peak queue size
@@ -141,7 +245,7 @@ class Dispatcher:
             self.last_request_time = time.time()
             
             self.request_queue.put(request_data, block=False)
-            logger.info(f"Request {request_id} queued. Queue size: {self.request_queue.qsize()}")
+            logger.info(f"Request {request_id} queued for processing. Queue size: {self.request_queue.qsize()}")
             return request_id
             
         except queue.Full:
@@ -160,7 +264,7 @@ class Dispatcher:
         return self.results.get(request_id, None)
     
     def get_status(self):
-        """Get enhanced dispatcher status"""
+        """Get enhanced dispatcher status including cache metrics"""
         current_time = time.time()
         uptime = current_time - self.start_time
         
@@ -178,6 +282,10 @@ class Dispatcher:
             if self.total_requests > 0 else 0
         )
         throughput = self.successful_requests / uptime if uptime > 0 else 0
+        cache_hit_rate = (
+            (self.cache_hits / self.total_requests) * 100 
+            if self.total_requests > 0 else 0
+        )
         
         return {
             # Existing metrics
@@ -188,7 +296,7 @@ class Dispatcher:
             "stored_results": len(self.results),
             "endpoint_url": self.endpoint_url,
             
-            # New metrics
+            # Performance metrics
             "performance_metrics": {
                 "avg_processing_time": round(avg_processing_time, 3),
                 "avg_queue_time": round(avg_queue_time, 3),
@@ -203,8 +311,19 @@ class Dispatcher:
                 "error_rate": round(error_rate, 2),
                 "uptime": round(uptime, 2),
                 "last_request_timestamp": self.last_request_time
+            },
+            
+            # New cache metrics
+            "cache_metrics": {
+                "cache_hits": self.cache_hits,
+                "cache_hit_rate": round(cache_hit_rate, 2),
+                **self.cache.get_stats()
             }
         }
+    
+    def clear_cache(self):
+        """Clear the image cache"""
+        self.cache.clear()
 
 # Flask app
 app = Flask(__name__)
@@ -212,7 +331,7 @@ dispatcher = Dispatcher()
 
 @app.route('/predict_async', methods=['POST'])
 def predict_async():
-    """Asynchronous prediction - queue the request and return request ID"""
+    """Asynchronous prediction - check cache first, then queue if needed"""
     if 'image' not in request.files:
         return jsonify({"error": "No image provided"}), 400
     
@@ -220,16 +339,28 @@ def predict_async():
     if image_file.filename == '':
         return jsonify({"error": "Empty filename"}), 400
     
-    # Queue the request and get request ID
+    # Queue the request (cache check happens inside)
     request_id = dispatcher.queue_request(image_file.read(), image_file.filename)
     
     if request_id:
-        return jsonify({
-            "message": "Request queued for processing",
-            "request_id": request_id,
-            "queue_size": dispatcher.request_queue.qsize(),
-            "status_url": f"/result/{request_id}"
-        }), 202
+        # Check if result was served from cache
+        result = dispatcher.get_result(request_id)
+        if result and result.get('from_cache', False):
+            return jsonify({
+                "message": "Result served from cache",
+                "request_id": request_id,
+                "from_cache": True,
+                "result": result['result'],
+                "status_url": f"/result/{request_id}"
+            }), 200
+        else:
+            return jsonify({
+                "message": "Request queued for processing",
+                "request_id": request_id,
+                "queue_size": dispatcher.request_queue.qsize(),
+                "from_cache": False,
+                "status_url": f"/result/{request_id}"
+            }), 202
     else:
         return jsonify({"error": "Failed to queue request"}), 503
 
@@ -250,7 +381,7 @@ def health():
 
 @app.route('/status', methods=['GET'])
 def status():
-    """Get dispatcher status"""
+    """Get dispatcher status including cache metrics"""
     return jsonify(dispatcher.get_status())
 
 @app.route('/results', methods=['GET'])
@@ -261,13 +392,26 @@ def list_results():
         "results": list(dispatcher.results.keys())
     }), 200
 
+@app.route('/cache/clear', methods=['POST'])
+def clear_cache():
+    """Clear the image cache"""
+    dispatcher.clear_cache()
+    return jsonify({"message": "Cache cleared successfully"}), 200
+
+@app.route('/cache/stats', methods=['GET'])
+def cache_stats():
+    """Get detailed cache statistics"""
+    return jsonify(dispatcher.cache.get_stats()), 200
+
 if __name__ == '__main__':
-    print("Starting Simple Dispatcher with Async Results...")
+    print("Starting Enhanced Dispatcher with Image Caching...")
     print("Endpoints:")
-    print("  POST /predict_async     - Asynchronous prediction (queued)")
+    print("  POST /predict_async     - Asynchronous prediction (cached)")
     print("  GET  /result/<id>       - Get result by request ID")
     print("  GET  /results           - List all result IDs")
     print("  GET  /health            - Health check")
-    print("  GET  /status            - Dispatcher status")
+    print("  GET  /status            - Dispatcher status with cache metrics")
+    print("  GET  /cache/stats       - Detailed cache statistics")
+    print("  POST /cache/clear       - Clear image cache")
     
     app.run(host='0.0.0.0', port=8080, debug=False)
