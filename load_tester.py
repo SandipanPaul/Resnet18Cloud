@@ -1,223 +1,239 @@
 #!/usr/bin/env python3
 """
-Simple Image Load Tester
-A minimal implementation for testing image APIs.
-Automatically counts images in a folder and serves each image exactly once
-using a realistic ramp-up pattern.
+Image Load Tester
+Sends POST requests with random images to simulate load testing
 """
 
-import json
-import base64
 import os
+import time
 import random
+import requests
+import threading
 from pathlib import Path
-from typing import Tuple, List
-from barazmoon import BarAzmoon
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-class SimpleImageTester(BarAzmoon):
-    def __init__(self, workload: List[int], endpoint: str, image_folder: str):
-        super().__init__(workload=workload, endpoint=endpoint, http_method="post")
-        self.image_folder = Path(image_folder)
-        self.image_count = self._count_images()
-        self._counter = 0
-    
-    def _count_images(self) -> int:
-        """Count total number of images in the folder."""
-        if not self.image_folder.exists():
-            raise FileNotFoundError(f"Image folder not found: {self.image_folder}")
+class ImageLoadTester:
+    def __init__(self, image_dir="images/imagenet-sample-images", base_url="http://127.0.0.1:8080"):
+        self.image_dir = Path(image_dir)
+        self.base_url = base_url
+        self.endpoint = f"{base_url}/predict_async"
+        self.image_files = self._get_image_files()
         
-        count = 0
-        for ext in ['.jpg', '.jpeg', '.JPG', '.JPEG']:
-            count += len(list(self.image_folder.glob(f"*{ext}")))
+        # Statistics
+        self.total_requests = 0
+        self.successful_requests = 0
+        self.failed_requests = 0
+        self.response_times = []
+        self.lock = threading.Lock()
         
-        if count == 0:
-            raise ValueError(f"No images found in {self.image_folder}")
-        
-        return count
-    
-    def get_request_data(self) -> Tuple[str, str]:
-        """Load and encode an image."""
-        # Get list of images each time (to avoid pickling issues)
-        images = []
-        for ext in ['.jpg', '.jpeg', '.JPG', '.JPEG']:
-            images.extend(list(self.image_folder.glob(f"*{ext}")))
-        
-        # Use counter to cycle through images
-        image_path = images[self._counter % len(images)]
-        self._counter += 1
-        
-        request_id = f"{image_path.stem}_{random.randint(1000, 9999)}"
-        
-        # Read and encode image
-        with open(image_path, 'rb') as f:
-            image_data = f.read()
-        
-        encoded_image = base64.b64encode(image_data).decode('utf-8')
-        
-        request_data = {
-            "image": encoded_image,
-            "filename": image_path.name,
-            "request_id": request_id
-        }
-        
-        return request_id, json.dumps(request_data)
-    
-    def process_response(self, data_id: str, response: dict):
-        """Handle the API response."""
-        if hasattr(response, 'status_code'):
-            if response['status_code'] == 200:
-                print(f"✓ {data_id}: Success")
-            else:
-                print(f"✗ {data_id}: Failed ({response['status_code']})")
-        else:
-            print(f"? {data_id}: Unknown response")
-        return True
-
-def create_realistic_workload(num_images: int) -> List[int]:
-
-    if num_images <= 0:
-        return []
-    
-    # For very small counts, just use 1 RPS
-    if num_images <= 10:
-        return [1] * num_images
-    
-    # Define load levels
-    min_rps = 1
-    valley_rps = max(2, min_rps + 1)  # Valley between peaks
-    peak_rps = min(30, max(3, num_images // 20))  # Scale peak based on image count, max 30
-    
-    # Calculate phase durations
-    ramp_up_duration = max(3, min(8, num_images // 25))
-    ramp_down_duration = max(3, min(8, num_images // 25))
-    
-    # Number of peaks (2-4 depending on image count)
-    num_peaks = min(4, max(2, num_images // 50))
-    valley_duration = max(2, min(5, num_images // 40))
-    
-    workload = []
-    total_requests_used = 0
-    
-    # Phase 1: Initial ramp up
-    for i in range(ramp_up_duration):
-        progress = (i + 1) / ramp_up_duration
-        current_rps = min_rps + int((peak_rps - min_rps) * progress)
-        workload.append(current_rps)
-        total_requests_used += current_rps
-    
-    # Calculate requests needed for valleys and final ramp down
-    valley_requests = valley_duration * valley_rps * (num_peaks - 1)  # Valleys between peaks
-    
-    ramp_down_requests = 0
-    for i in range(ramp_down_duration):
-        progress = (ramp_down_duration - i) / ramp_down_duration
-        current_rps = valley_rps + int((peak_rps - valley_rps) * progress)
-        ramp_down_requests += current_rps
-    
-    # Remaining requests for all peaks
-    remaining_for_peaks = num_images - total_requests_used - valley_requests - ramp_down_requests
-    
-    if remaining_for_peaks > 0:
-        # Distribute requests among peaks with some variation
-        peak_requests = []
-        base_requests_per_peak = remaining_for_peaks // num_peaks
-        
-        for i in range(num_peaks):
-            # Add some variation to peak sizes (±20%)
-            variation = int(base_requests_per_peak * 0.2)
-            if i == 0:  # First peak slightly higher
-                peak_size = base_requests_per_peak + variation // 2
-            elif i == num_peaks - 1:  # Last peak gets remainder
-                peak_size = remaining_for_peaks - sum(peak_requests)
-            else:
-                import random
-                peak_size = base_requests_per_peak + random.randint(-variation, variation)
+    def _get_image_files(self):
+        """Get list of all image files in the directory"""
+        if not self.image_dir.exists():
+            raise FileNotFoundError(f"Image directory {self.image_dir} not found")
             
-            peak_requests.append(max(1, peak_size))
+        # Common image extensions
+        extensions = {'.jpg', '.jpeg'}
+        image_files = []
         
-        # Create peaks with valleys between them
-        for i, peak_size in enumerate(peak_requests):
-            # Add peak
-            if peak_size > 0:
-                peak_duration = peak_size // peak_rps
-                peak_remainder = peak_size % peak_rps
+        for file_path in self.image_dir.rglob('*'):
+            if file_path.is_file() and file_path.suffix.lower() in extensions:
+                image_files.append(file_path)
                 
-                # Add full peak periods
-                workload.extend([peak_rps] * peak_duration)
-                total_requests_used += peak_duration * peak_rps
-                
-                # Add partial peak if needed
-                if peak_remainder > 0:
-                    workload.append(peak_remainder)
-                    total_requests_used += peak_remainder
+        if not image_files:
+            raise ValueError(f"No image files found in {self.image_dir}")
             
-            # Add valley between peaks (except after last peak)
-            if i < num_peaks - 1:
-                workload.extend([valley_rps] * valley_duration)
-                total_requests_used += valley_duration * valley_rps
+        logger.info(f"Found {len(image_files)} image files")
+        return image_files
     
-    # Phase 3: Final ramp down
-    requests_left = num_images - total_requests_used
-    for i in range(ramp_down_duration):
-        if requests_left <= 0:
-            break
-        progress = (ramp_down_duration - i) / ramp_down_duration
-        target_rps = valley_rps + int((peak_rps - valley_rps) * progress)
-        actual_rps = min(target_rps, requests_left)
-        workload.append(actual_rps)
-        requests_left -= actual_rps
+    def send_request(self, image_path):
+        """Send a single POST request with an image"""
+        start_time = time.time()
+        
+        try:
+            with open(image_path, 'rb') as img_file:
+                files = {'image': (image_path.name, img_file, 'image/jpeg')}
+                response = requests.post(self.endpoint, files=files, timeout=30)
+                
+            end_time = time.time()
+            response_time = end_time - start_time
+            
+            with self.lock:
+                self.total_requests += 1
+                self.response_times.append(response_time)
+                
+                if response.status_code in [200,202]:
+                    self.successful_requests += 1
+                    logger.debug(f"✓ Success: {image_path.name} - {response.status_code} - {response_time:.3f}s")
+                else:
+                    self.failed_requests += 1
+                    logger.warning(f"✗ Failed: {image_path.name} - {response.status_code} - {response_time:.3f}s")
+                    
+            return {
+                'success': response.status_code in [200,202],
+                'status_code': response.status_code,
+                'response_time': response_time,
+                'image': image_path.name
+            }
+            
+        except Exception as e:
+            end_time = time.time()
+            response_time = end_time - start_time
+            
+            with self.lock:
+                self.total_requests += 1
+                self.failed_requests += 1
+                self.response_times.append(response_time)
+                
+            logger.error(f"✗ Error: {image_path.name} - {str(e)}")
+            return {
+                'success': False,
+                'error': str(e),
+                'response_time': response_time,
+                'image': image_path.name
+            }
     
-    # Add any final remaining requests
-    if requests_left > 0:
-        workload.append(requests_left)
+    def run_load_test(self, images_per_second_schedule, max_workers=50):
+        """
+        Run load test with varying number of images sent per second
+        
+        Args:
+            images_per_second_schedule: List of images per second values
+            max_workers: Maximum number of concurrent threads
+        """
+        logger.info(f"Starting load test - Images per second schedule: {images_per_second_schedule}")
+        logger.info(f"Max workers: {max_workers}")
+        
+        total_start_time = time.time()
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            current_time = total_start_time
+            second_counter = 0
+            
+            for images_per_sec in images_per_second_schedule:
+                logger.info(f"Second {second_counter + 1}: Sending {images_per_sec} images")
+                
+                if images_per_sec == 0:
+                    logger.info("Resting - no images sent this second")
+                    time.sleep(1.0)
+                    second_counter += 1
+                    continue
+                
+                # Calculate interval between images for this second
+                interval_between_images = 1.0 / images_per_sec
+                second_start_time = time.time()
+                
+                # Send the specified number of images in this second
+                for i in range(images_per_sec):
+                    # Select random image from the 1000 available
+                    random_image = random.choice(self.image_files)
+                    
+                    # Submit image POST request
+                    future = executor.submit(self.send_request, random_image)
+                    futures.append(future)
+                    
+                    # Wait for the interval before next image (except for the last one)
+                    if i < images_per_sec - 1:
+                        time.sleep(interval_between_images)
+                
+                # Ensure we spent exactly 1 second on this batch
+                elapsed = time.time() - second_start_time
+                if elapsed < 1.0:
+                    time.sleep(1.0 - elapsed)
+                
+                second_counter += 1
+            
+            # Wait for all remaining requests to complete
+            logger.info(f"Waiting for {len(futures)} total image requests to complete...")
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=30)
+                except Exception as e:
+                    logger.error(f"Image request failed: {e}")
+        
+        total_duration = time.time() - total_start_time
+        logger.info(f"\n=== Load Test Completed in {total_duration:.1f}s ===")
     
-    return workload
+    '''
+    def print_stats(self):
+        """Print current statistics"""
+        with self.lock:
+            if self.total_requests == 0:
+                return
+                
+            success_rate = (self.successful_requests / self.total_requests) * 100
+            avg_response_time = sum(self.response_times) / len(self.response_times)
+            
+            logger.info(f"Stats: {self.total_requests} total, {self.successful_requests} success, "
+                       f"{self.failed_requests} failed, {success_rate:.1f}% success rate, "
+                       f"{avg_response_time:.3f}s avg response time")
+    
+    def print_final_stats(self):
+        """Print detailed final statistics"""
+        with self.lock:
+            if not self.response_times:
+                logger.info("No requests completed")
+                return
+                
+            self.response_times.sort()
+            total = len(self.response_times)
+            
+            stats = {
+                'Total Requests': self.total_requests,
+                'Successful': self.successful_requests,
+                'Failed': self.failed_requests,
+                'Success Rate': f"{(self.successful_requests / self.total_requests) * 100:.1f}%",
+                'Avg Response Time': f"{sum(self.response_times) / total:.3f}s",
+                'Min Response Time': f"{min(self.response_times):.3f}s",
+                'Max Response Time': f"{max(self.response_times):.3f}s",
+                'P50 Response Time': f"{self.response_times[int(total * 0.5)]:.3f}s",
+                'P95 Response Time': f"{self.response_times[int(total * 0.95)]:.3f}s",
+                'P99 Response Time': f"{self.response_times[int(total * 0.99)]:.3f}s",
+            }
+            
+            print("\n" + "="*50)
+            print("FINAL LOAD TEST RESULTS")
+            print("="*50)
+            for key, value in stats.items():
+                print(f"{key:20}: {value}")
+            print("="*50)
+        '''
 
-
-
-# Example usage
-if __name__ == "__main__":
+def main():
     # Configuration
-    API_ENDPOINT = "http://127.0.0.1:8080/predict_async"  # Change this to your API
-    IMAGE_FOLDER = "./images/imagenet-sample-images"  # Folder containing your test images
+    IMAGE_DIR = "images/imagenet-sample-images"
+    BASE_URL = "http://127.0.0.1:8080"
     
-    # First, create a temporary tester to get the number of images
-    try:
-        temp_tester = SimpleImageTester(workload=[1], endpoint=API_ENDPOINT, image_folder=IMAGE_FOLDER)
-        num_images = temp_tester.image_count
-    except Exception as e:
-        print(f"Error: {e}")
-        print("Make sure your image folder exists and contains image files.")
-        exit(1)
+    # Define your load test schedule (number of images to POST per second)
+    # Each number represents how many random images to send in that second
+    LOAD_SCHEDULE = [4, 8, 11, 15, 19, 22, 26, 30, 30, 30, 30, 30, 30, 30, 10, 2, 2, 2, 2, 2, 30, 30, 30, 30, 27, 2, 2, 2, 2, 2, 30, 30, 30, 30, 30, 30, 1, 2, 2, 2, 2, 2, 30, 30, 30, 30, 30, 27, 30, 26, 23, 19, 16, 12, 9, 5]
     
-    # Use realistic workload pattern
-    workload = create_realistic_workload(num_images)
-    print(f"Using realistic workload pattern - each image will be tested once")
-    
-    print(f"Found {num_images} images in {IMAGE_FOLDER}")
-    print(f"Test duration: {len(workload)} seconds")
-    print(f"Peak load: {max(workload)} requests/second")
-    print(f"Total requests: {sum(workload)}")
-    print(f"workload: {workload}" )
+    # Maximum concurrent workers
+    MAX_WORKERS = 50
     
     try:
-        # Create and run the tester
-        tester = SimpleImageTester(
-            workload=workload,
-            endpoint=API_ENDPOINT,
-            image_folder=IMAGE_FOLDER,
+        # Initialize load tester
+        tester = ImageLoadTester(IMAGE_DIR, BASE_URL)
+        
+        # Run the load test
+        tester.run_load_test(
+            images_per_second_schedule=LOAD_SCHEDULE,
+            max_workers=MAX_WORKERS
         )
         
-        print(f"\nStarting load test against {API_ENDPOINT}")
-        print("Press Ctrl+C to stop early\n")
-        
-        # Start the test
-        tester.start()
-        
-        print("\nLoad test completed!")
-        
     except KeyboardInterrupt:
-        print("\nTest stopped by user")
+        logger.info("\nLoad test interrupted by user")
     except Exception as e:
-        print(f"Error during test: {e}")
+        logger.error(f"Load test failed: {e}")
+
+
+if __name__ == "__main__":
+    main()
