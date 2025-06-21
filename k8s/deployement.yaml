@@ -17,7 +17,7 @@ spec:
         image: resnet18-app:latest
         imagePullPolicy: Never
         ports:
-        - containerPort: 5000
+        - containerPort: 5000  #flask app
         
         
 
@@ -31,7 +31,7 @@ spec:
     app: resnet18-app
   ports:
     - protocol: TCP
-      port: 5000
-      targetPort: 5000
-      nodePort: 31866
+      port: 5000          # “ServicePort”: port number on the Service’s ClusterIP, http://resnet18-service:5000/
+      targetPort: 5000    # “PodPort”: what each pod’s container is actually listening to , k8s fwds to :5000 inside each pod after clients call http://resnet18-service:5000/ 
+      nodePort: 31866     # “HostPort”: clients outside the cluter hits any node with this IP
   type: NodePort

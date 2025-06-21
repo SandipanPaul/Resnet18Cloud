@@ -4,3 +4,4 @@ torchvision
 flask
 requests
 kubernetes
+pandas

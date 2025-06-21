@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: predictive-autoscaler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: predictive-autoscaler
+  template:
+    metadata:
+      labels:
+        app: predictive-autoscaler
+    spec:
+      containers:
+      - name: autoscaler
+        image: autoscaler:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: DISPATCHER_URL
+          value: "http://dispatcher-service:8080/status"
+        - name: MODEL_URL
+          value: "http://resnet18-service:5000"
+        - name: CHECK_INTERVAL
+          value: "5"

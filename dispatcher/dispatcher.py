@@ -86,16 +86,24 @@ class ImageCache:
 
 class Dispatcher:
     def __init__(self):
-        # Load configuration
+        # Default endpoint if config isn’t found or is invalid
+        default_url = "http://127.0.0.1:5000"
+
+        # Try loading from config/service.cfg
         config = configparser.ConfigParser()
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'service.cfg')
-        try:
-            config.read(config_path)
-            service_config = config['service']
-            self.endpoint_url = f"{service_config['protocol']}://{service_config['minikube_ip']}:{service_config['node_port']}"
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
-            sys.exit(1)
+        cfg_path = os.path.join(os.getcwd(), 'config', 'service.cfg')
+        if os.path.exists(cfg_path):
+            try:
+                config.read(cfg_path)
+                svc = config['service']
+                self.endpoint_url = f"{svc['protocol']}://{svc['minikube_ip']}:{svc['node_port']}"
+                logger.info(f"Dispatcher using endpoint from config: {self.endpoint_url}")
+            except Exception as e:
+                logger.warning(f"Failed to parse service.cfg ({e}), falling back to default URL")
+                self.endpoint_url = default_url
+        else:
+            logger.warning(f"No service.cfg found at {cfg_path}, using default endpoint")
+            self.endpoint_url = default_url
         
         # Initialize cache
         self.cache = ImageCache(max_size=1000)  # Configurable cache size
