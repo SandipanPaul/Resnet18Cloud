@@ -24,8 +24,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy in your dispatcher code and config
-COPY dispatcher/dispatcher.py .
-COPY config/service.cfg config/service.cfg
+COPY ./dispatcher.py .
 
 # Expose the port your Flask app listens on
 EXPOSE 8080

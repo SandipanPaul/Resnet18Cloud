@@ -210,7 +210,7 @@ class ImageLoadTester:
 def main():
     # Configuration
     IMAGE_DIR = "images/imagenet-sample-images"
-    BASE_URL = "http://127.0.0.1:8080"
+    BASE_URL = "http://127.0.0.1:36135"
     
     # Define your load test schedule (number of images to POST per second)
     # Each number represents how many random images to send in that second

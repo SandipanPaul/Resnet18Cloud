@@ -15,7 +15,7 @@ spec:
       containers:
       - name: dispatcher
         image: dispatcher:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Never
         ports:
         - containerPort: 8080
 ---
@@ -30,4 +30,5 @@ spec:
     - protocol: TCP
       port: 8080       # in-cluster clients call this port
       targetPort: 8080 # containerPort on the pods
-  type: ClusterIP     # internal-only
+      nodePort: 31866
+  type: NodePort     # internal-only

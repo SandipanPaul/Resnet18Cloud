@@ -87,23 +87,24 @@ class ImageCache:
 class Dispatcher:
     def __init__(self):
         # Default endpoint if config isn’t found or is invalid
-        default_url = "http://127.0.0.1:5000"
+        default_url = "http://resnet18-service.default.svc.cluster.local:5000"
+        self.endpoint_url = default_url
 
-        # Try loading from config/service.cfg
-        config = configparser.ConfigParser()
-        cfg_path = os.path.join(os.getcwd(), 'config', 'service.cfg')
-        if os.path.exists(cfg_path):
-            try:
-                config.read(cfg_path)
-                svc = config['service']
-                self.endpoint_url = f"{svc['protocol']}://{svc['minikube_ip']}:{svc['node_port']}"
-                logger.info(f"Dispatcher using endpoint from config: {self.endpoint_url}")
-            except Exception as e:
-                logger.warning(f"Failed to parse service.cfg ({e}), falling back to default URL")
-                self.endpoint_url = default_url
-        else:
-            logger.warning(f"No service.cfg found at {cfg_path}, using default endpoint")
-            self.endpoint_url = default_url
+        # # Try loading from config/service.cfg
+        # config = configparser.ConfigParser()
+        # cfg_path = os.path.join(os.getcwd(), 'config', 'service.cfg')
+        # if os.path.exists(cfg_path):
+        #     try:
+        #         config.read(cfg_path)
+        #         svc = config['service']
+        #         self.endpoint_url = f"{svc['protocol']}://{svc['minikube_ip']}:{svc['node_port']}"
+        #         logger.info(f"Dispatcher using endpoint from config: {self.endpoint_url}")
+        #     except Exception as e:
+        #         logger.warning(f"Failed to parse service.cfg ({e}), falling back to default URL")
+        #         self.endpoint_url = default_url
+        # else:
+        #     logger.warning(f"No service.cfg found at {cfg_path}, using default endpoint")
+        #     self.endpoint_url = default_url
         
         # Initialize cache
         self.cache = ImageCache(max_size=1000)  # Configurable cache size
