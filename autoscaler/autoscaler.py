@@ -36,7 +36,7 @@ class ScalingConfig:
     queue_utilization_threshold: float = 15.0  # Scale up when queue > 15% full
     
     # Replica limits
-    min_replicas: int = 2
+    min_replicas: int = 5
     max_replicas: int = 50
     
     # Scaling behavior
@@ -45,7 +45,7 @@ class ScalingConfig:
     scale_down_increment: int = 1 # Scale down increment
     
     # Cooldown periods (seconds)
-    scale_up_cooldown: int = 30
+    scale_up_cooldown: int = 10
     scale_down_cooldown: int = 120
     
     # Monitoring
