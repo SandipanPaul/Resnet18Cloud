@@ -6,8 +6,6 @@ from flask import Flask, request, jsonify
 import logging
 import uuid
 from datetime import datetime, timedelta
-import configparser
-import os, sys
 import hashlib
 from collections import OrderedDict
 
@@ -26,7 +24,7 @@ class ImageCache:
     
     def _generate_hash(self, image_data):
         """Generate SHA-256 hash of image content"""
-        return hashlib.sha256(image_data).hexdigest()
+        return hashlib.blake2b(image_data, digest_size=16).hexdigest()
     
     def get(self, image_data):
         """Get cached result for image"""
@@ -82,6 +80,8 @@ class ImageCache:
         """Clear all cached entries"""
         with self.lock:
             self.cache.clear()
+            self.hits = 0
+            self.misses = 0
             logger.info("Cache cleared")
 
 class Dispatcher:
@@ -89,22 +89,6 @@ class Dispatcher:
         # Default endpoint if config isn’t found or is invalid
         default_url = "http://resnet18-service.default.svc.cluster.local:5000"
         self.endpoint_url = default_url
-
-        # # Try loading from config/service.cfg
-        # config = configparser.ConfigParser()
-        # cfg_path = os.path.join(os.getcwd(), 'config', 'service.cfg')
-        # if os.path.exists(cfg_path):
-        #     try:
-        #         config.read(cfg_path)
-        #         svc = config['service']
-        #         self.endpoint_url = f"{svc['protocol']}://{svc['minikube_ip']}:{svc['node_port']}"
-        #         logger.info(f"Dispatcher using endpoint from config: {self.endpoint_url}")
-        #     except Exception as e:
-        #         logger.warning(f"Failed to parse service.cfg ({e}), falling back to default URL")
-        #         self.endpoint_url = default_url
-        # else:
-        #     logger.warning(f"No service.cfg found at {cfg_path}, using default endpoint")
-        #     self.endpoint_url = default_url
         
         # Initialize cache
         self.cache = ImageCache(max_size=1000)  # Configurable cache size
@@ -122,9 +106,9 @@ class Dispatcher:
         self.total_requests = 0
         self.successful_requests = 0
         self.failed_requests = 0
-        self.cache_hits = 0  # New metric for cache hits
+        self.queue_full_errors = 0  # Separate queue-full errors from processing errors
         
-        # New metrics
+        # Performance metrics
         self.start_time = time.time()
         self.peak_queue_size = 0
         self.total_processing_time = 0
@@ -143,7 +127,7 @@ class Dispatcher:
         while True:
             try:
                 # Blocking request
-                request_data = self.request_queue.get(timeout=1)
+                request_data = self.request_queue.get(timeout=0.5)
                 self._forward_request(request_data)
             except queue.Empty:
                 continue
@@ -248,7 +232,7 @@ class Dispatcher:
                 'from_cache': False
             }
             
-            # Update peak queue size
+            # Update peak queue size and last request time
             current_size = self.request_queue.qsize()
             self.peak_queue_size = max(self.peak_queue_size, current_size)
             self.last_request_time = time.time()
@@ -273,60 +257,89 @@ class Dispatcher:
         return self.results.get(request_id, None)
     
     def get_status(self):
-        """Get enhanced dispatcher status including cache metrics"""
+        """Get enhanced dispatcher status with corrected metrics"""
         current_time = time.time()
         uptime = current_time - self.start_time
         
-        # Calculate derived metrics
+        # Get cache stats to avoid redundant tracking
+        cache_stats = self.cache.get_stats()
+        
+        # Thread-safe access to metrics
+        with self.stats_lock:
+            total_requests = self.total_requests
+            successful_requests = self.successful_requests
+            failed_requests = self.failed_requests
+            queue_full_errors = self.queue_full_errors
+            total_processing_time = self.total_processing_time
+            total_queue_time = self.total_queue_time
+            peak_queue_size = self.peak_queue_size
+            last_request_time = self.last_request_time
+        
+        # Calculate requests that went through the queue (not cached)
+        queued_requests = total_requests - cache_stats['hits']
+        processing_errors = failed_requests - queue_full_errors
+        
+        # Calculate derived metrics with proper denominators
         avg_processing_time = (
-            self.total_processing_time / self.successful_requests 
-            if self.successful_requests > 0 else 0
+            total_processing_time / successful_requests 
+            if successful_requests > 0 else 0
         )
+        
+        # Fixed: Use queued_requests instead of total_requests
         avg_queue_time = (
-            self.total_queue_time / self.total_requests 
-            if self.total_requests > 0 else 0
+            total_queue_time / queued_requests 
+            if queued_requests > 0 else 0
         )
+        
         error_rate = (
-            (self.failed_requests / self.total_requests) * 100 
-            if self.total_requests > 0 else 0
+            (failed_requests / total_requests) * 100 
+            if total_requests > 0 else 0
         )
-        throughput = self.successful_requests / uptime if uptime > 0 else 0
-        cache_hit_rate = (
-            (self.cache_hits / self.total_requests) * 100 
-            if self.total_requests > 0 else 0
+        
+        processing_error_rate = (
+            (processing_errors / queued_requests) * 100 
+            if queued_requests > 0 else 0
         )
+        
+        throughput = successful_requests / uptime if uptime > 0 else 0
+        
+        # Use cache's internal hit rate calculation
+        cache_hit_rate = cache_stats['hit_rate']
         
         return {
             # Existing metrics
             "queue_size": self.request_queue.qsize(),
-            "total_requests": self.total_requests,
-            "successful_requests": self.successful_requests,
-            "failed_requests": self.failed_requests,
+            "total_requests": total_requests,
+            "successful_requests": successful_requests,
+            "failed_requests": failed_requests,
+            "queued_requests": queued_requests,  # Add this for transparency
             "stored_results": len(self.results),
             "endpoint_url": self.endpoint_url,
             
             # Performance metrics
             "performance_metrics": {
                 "avg_processing_time": round(avg_processing_time, 3),
-                "avg_queue_time": round(avg_queue_time, 3),
+                "avg_queue_time": round(avg_queue_time, 3),  # Now correctly calculated
                 "throughput": round(throughput, 2)
             },
             "queue_metrics": {
-                "peak_queue_size": self.peak_queue_size,
+                "peak_queue_size": peak_queue_size,
                 "queue_capacity": self.queue_capacity,
                 "queue_utilization": round((self.request_queue.qsize() / self.queue_capacity) * 100, 2)
             },
             "health_metrics": {
                 "error_rate": round(error_rate, 2),
+                "processing_error_rate": round(processing_error_rate, 2),
+                "queue_full_errors": queue_full_errors,
+                "processing_errors": processing_errors,
                 "uptime": round(uptime, 2),
-                "last_request_timestamp": self.last_request_time
+                "last_request_timestamp": last_request_time
             },
             
-            # New cache metrics
+            # Use cache's internal metrics instead of redundant tracking
             "cache_metrics": {
-                "cache_hits": self.cache_hits,
-                "cache_hit_rate": round(cache_hit_rate, 2),
-                **self.cache.get_stats()
+                "cache_hit_rate": cache_hit_rate,
+                **cache_stats
             }
         }
     

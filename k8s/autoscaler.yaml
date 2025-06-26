@@ -12,14 +12,52 @@ spec:
       labels:
         app: predictive-autoscaler
     spec:
+      serviceAccountName: autoscaler-sa
       containers:
       - name: autoscaler
         image: autoscaler:latest
         imagePullPolicy: IfNotPresent
         env:
-        - name: DISPATCHER_URL
-          value: "http://dispatcher-service:8080/status"
-        - name: MODEL_URL
-          value: "http://resnet18-service:5000"
-        - name: CHECK_INTERVAL
-          value: "5"
+        
+        # Replica limits
+        - name: MIN_REPLICAS
+          value: "2"  # Always keep at least 2 pods
+        - name: MAX_REPLICAS
+          value: "50"  # Maximum 50 pods
+
+---
+# Service Account for (Role-Based Access Control) permissions. Required by autoscaler.py to read , write ,modify the replicas 
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autoscaler-sa
+  namespace: default
+
+---
+# ClusterRole with necessary permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: autoscaler-role
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autoscaler-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: autoscaler-role
+subjects:
+- kind: ServiceAccount
+  name: autoscaler-sa
+  namespace: default

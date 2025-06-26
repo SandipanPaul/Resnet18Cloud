@@ -42,12 +42,35 @@ minikube image load dispatcher:latest
 cd app/
 docker build -t resnet18-app:latest .
 minikube image load resnet18-app:latest
+
+# Autoscaler
+cd autoscaler/
+docker build -t autoscaler:latest .
+minikube image load autoscaler:latest
+```
+### Alternative 
+
+```bash
+eval $(minikube docker-env)
+
+# Dispatcher
+cd dispatcher/
+docker build -t dispatcher:latest .
+
+# App (ResNet18 service)
+cd app/
+docker build -t resnet18-app:latest .
+
+# Autoscaler
+cd autoscaler/
+docker build -t autoscaler:latest .
 ```
 
 ### 5. Deploy Kubernetes Services
 ```bash
 kubectl apply -f k8s/dispatcher.yaml   
-kubectl apply -f k8s/deployment.yaml             
+kubectl apply -f k8s/app.yaml
+kubectl apply -f k8s/autoscaler.yaml              
 # kubectl apply -f k8s/hpa.yaml                     
 ```
 
@@ -237,3 +260,16 @@ curl -X GET http://127.0.0.1:8080/result/<req_id>
 ```bash
 {"completed_at":"2025-06-06T11:55:36.456400","filename":"n01531178_goldfinch.JPEG","processing_time":0.22717595100402832,"queued_at":"2025-06-06T11:55:36.228686","replica_used":"http://127.0.0.1:5000","request_id":"9025f980-bc3a-4b70-a865-1d25494f5ac2","result":{"filename":"n01531178_goldfinch.JPEG","inference_time":0.19434309005737305,"predictions":["goldfinch","bulbul","chickadee","magpie","junco"]},"status":"completed"}
 ```
+
+### Alternative
+
+```bash
+python load_tester.py
+```
+
+# To-Do and Issues
+
+- Dispatcher crashing on high load
+- Add prometheus 
+- Run HPA.yaml as well and test
+- make comparison for HPA and autoscaler  

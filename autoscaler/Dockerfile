@@ -22,7 +22,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your autoscaler code
-COPY autoscaler/autoscaler.py .
+COPY ./autoscaler.py .
 
 
 # No ports to expose—this runs as a background worker
