@@ -29,11 +29,11 @@ class ScalingConfig:
     deployment_name: str = "resnet18-app"
     
     # Scaling thresholds (based on Little's Law)
-    queue_size_threshold: int = 3  # Scale up when queue > 3 requests
-    high_queue_threshold: int = 8   # Emergency scaling when queue > 8
+    queue_size_threshold: int = 50  # Scale up when queue > 3 requests
+    high_queue_threshold: int = 100   # Emergency scaling when queue > 8
     latency_threshold: float = 0.4  # Scale up when avg latency > 400ms
     error_rate_threshold: float = 5.0  # Scale up when error rate > 5%
-    queue_utilization_threshold: float = 15.0  # Scale up when queue > 15% full
+    queue_utilization_threshold: float = 40.0  # Scale up when queue > 15% full
     
     # Replica limits
     min_replicas: int = 5
@@ -45,7 +45,7 @@ class ScalingConfig:
     scale_down_increment: int = 1 # Scale down increment
     
     # Cooldown periods (seconds)
-    scale_up_cooldown: int = 10
+    scale_up_cooldown: int = 15
     scale_down_cooldown: int = 120
     
     # Monitoring
