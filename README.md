@@ -74,6 +74,13 @@ kubectl apply -f k8s/autoscaler.yaml
 # kubectl apply -f k8s/hpa.yaml                     
 ```
 
+### Get pod and deployment information
+
+```bash
+kubectl get pods
+kubectl get deployment
+```
+
 ### 6. Port forwarding & verifying the connection between dispatcher-replicas
 ```bash
 kubectl port-forward svc/dispatcher-service 8080:8080
@@ -261,11 +268,16 @@ curl -X GET http://127.0.0.1:8080/result/<req_id>
 {"completed_at":"2025-06-06T11:55:36.456400","filename":"n01531178_goldfinch.JPEG","processing_time":0.22717595100402832,"queued_at":"2025-06-06T11:55:36.228686","replica_used":"http://127.0.0.1:5000","request_id":"9025f980-bc3a-4b70-a865-1d25494f5ac2","result":{"filename":"n01531178_goldfinch.JPEG","inference_time":0.19434309005737305,"predictions":["goldfinch","bulbul","chickadee","magpie","junco"]},"status":"completed"}
 ```
 
+
 ### Alternative
 
 ```bash
 python load_tester.py
 ```
+
+- check the if app deployment is autoscaled on load
+
+![screenshot](./artifacts.jpeg)
 
 # To-Do and Issues
 
