@@ -88,6 +88,7 @@ class Dispatcher:
     def __init__(self):
         # Default endpoint if config isn’t found or is invalid
         default_url = "http://resnet18-service.default.svc.cluster.local:5000"
+        
         self.endpoint_url = default_url
         
         # Initialize cache
@@ -258,6 +259,8 @@ class Dispatcher:
     
     def get_status(self):
         """Get enhanced dispatcher status with corrected metrics"""
+        
+        self.stats_lock = threading.Lock()
         current_time = time.time()
         uptime = current_time - self.start_time
         
