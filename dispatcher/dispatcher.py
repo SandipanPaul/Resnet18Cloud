@@ -106,7 +106,6 @@ class Dispatcher:
         
         # Metrics
         self.total_requests = 0
-        self.cache_hits=0
         self.successful_requests = 0
         self.failed_requests = 0
         self.queue_full_errors = 0  # Separate queue-full errors from processing errors
@@ -200,7 +199,6 @@ class Dispatcher:
         # Check cache first
         cached_result = self.cache.get(image_data)
         if cached_result:
-            self.cache_hits += 1
             self.successful_requests += 1
             
             # Return cached result immediately
@@ -307,10 +305,7 @@ class Dispatcher:
         )
         
         throughput = successful_requests / uptime if uptime > 0 else 0
-        
-        # Use cache's internal hit rate calculation
-        cache_hit_rate = cache_stats['hit_rate']
-        
+           
         return {
             # Existing metrics
             "queue_size": self.request_queue.qsize(),
@@ -341,11 +336,6 @@ class Dispatcher:
                 "last_request_timestamp": last_request_time
             },
             
-            # Use cache's internal metrics instead of redundant tracking
-            "cache_metrics": {
-                "cache_hit_rate": cache_hit_rate,
-                **cache_stats
-            }
         }
     
     def clear_cache(self):
