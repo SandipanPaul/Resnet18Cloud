@@ -88,6 +88,7 @@ class Dispatcher:
     def __init__(self):
         # Default endpoint if config isn’t found or is invalid
         default_url = "http://resnet18-service.default.svc.cluster.local:5000"
+        #default_url = "http://127.0.0.1:5000"
         
         self.endpoint_url = default_url
         
@@ -105,6 +106,7 @@ class Dispatcher:
         
         # Metrics
         self.total_requests = 0
+        self.cache_hits=0
         self.successful_requests = 0
         self.failed_requests = 0
         self.queue_full_errors = 0  # Separate queue-full errors from processing errors
