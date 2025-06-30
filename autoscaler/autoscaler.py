@@ -62,12 +62,12 @@ class ScalingConfig:
     scale_down_increment: int = 1 # Scale down increment
     
     # Cooldown periods (seconds)
-    scale_up_cooldown: int = 15
-    scale_down_cooldown: int = 120
+    scale_up_cooldown: int = 10
+    scale_down_cooldown: int = 60
     
     # Monitoring
     metrics_url: str = "http://dispatcher-service:8080/status"
-    poll_interval: int = 10  # seconds
+    poll_interval: int = 5  # seconds
 
 class KubernetesAutoscaler:
     def __init__(self, scaling_config: ScalingConfig):
