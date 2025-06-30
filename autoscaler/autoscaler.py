@@ -14,6 +14,23 @@ from typing import Optional
 from kubernetes import client, config
 import os
 
+from prometheus_client import start_http_server, Gauge
+import time
+import threading
+
+queue_size_gauge = Gauge('autoscaler_queue_size', 'Current queue size')
+queue_utilization_gauge = Gauge('autoscaler_queue_utilization', 'Current queue utilization')
+avg_processing_time_gauge = Gauge('autoscaler_avg_processing_time', 'Average processing time')
+avg_queue_time_gauge = Gauge('autoscaler_avg_queue_time', 'Average queue time')
+error_rate_gauge = Gauge('autoscaler_error_rate', 'Error rate')
+throughput_gauge = Gauge('autoscaler_throughput', 'Request throughput')
+
+def expose_metrics():
+    # Starts a Prometheus HTTP server at port 8000
+    start_http_server(8000)
+
+threading.Thread(target=expose_metrics, daemon=True).start()
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -115,6 +132,13 @@ class KubernetesAutoscaler:
                    f"Latency: {total_latency:.3f}s, Error Rate: {error_rate}%, "
                    f"Throughput: {throughput:.2f}/s")
         
+        queue_size_gauge.set(queue_size)
+        queue_utilization_gauge.set(queue_utilization)
+        avg_processing_time_gauge.set(avg_processing_time)
+        avg_queue_time_gauge.set(avg_queue_time)
+        error_rate_gauge.set(error_rate)
+        throughput_gauge.set(throughput)
+
         desired_replicas = self.current_replicas
         scale_reason = ""
         

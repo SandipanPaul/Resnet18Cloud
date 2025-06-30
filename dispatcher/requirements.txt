@@ -5,3 +5,4 @@ flask
 requests
 kubernetes
 pandas
+prometheus_flask_exporter

@@ -16,6 +16,10 @@ spec:
       containers:
       - name: autoscaler
         image: autoscaler:latest
+        ports:
+        - name: metrics
+          containerPort: 8000
+          protocol: TCP
         imagePullPolicy: IfNotPresent
         env:
         - name: K8S_DEPLOYMENT
