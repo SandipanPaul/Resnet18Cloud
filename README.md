@@ -233,8 +233,11 @@ expected output:
 ```
 It means load testetr is talking to the dispatcher, and dispatcher is fwding the requests to the replicas.
 
-
-
+#Monitoring (i'll update this section later now just dropping the screenshots
+![screenshot](./Screenshots/1.png)
+![screenshot](./Screenshots/2.png)
+![screenshot](./Screenshots/3.png)
+![screenshot](./Screenshots/4.png)
 
 
 <!--NEEDS TO BE UPDATED-->
