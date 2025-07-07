@@ -1,0 +1,17 @@
+# autoscaler-podmonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: autoscaler-podmonitor
+  namespace: default
+  labels:
+    app: autoscaler
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: autoscaler
+  podMetricsEndpoints:
+    - targetPort: 8000
+      path: /metrics
+      interval: 15s
